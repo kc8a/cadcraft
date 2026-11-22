@@ -1,193 +1,83 @@
-//! The Array dialog (ARRAY, ARRAYRECT, ARRAYPOLAR): one window with the rectangular and polar
-//! settings. It never edits the drawing itself: a centre pick goes through HATCHPICK, and OK runs
-//! one ARRAYRECT or ARRAYPOLAR call on the current selection.
+//! The Array window (ARRAYRECT, ARRAYPOLAR): a second view of the **running** command. The command
+//! line keeps its prompts and the canvas keeps its preview; the window reads and writes the live
+//! parameters ([`cadcraft_engine::ArrayLive`]), so an edit on either side shows on the other.
 
-use cadcraft_doc::{Handle, Space};
-use serde_json::{Value, json};
+use cadcraft_doc::Space;
+use cadcraft_engine::{ArrayLive, ArrayLiveKind};
+use cadcraft_geom::Vec2;
 
 use crate::CadApp;
 use crate::theme::Tokens;
 
-/// Which array the dialog builds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ArrayKind {
-    #[default]
-    Rectangular,
-    Polar,
-}
-
-/// The dialog while open (and while a centre pick it started runs).
-#[derive(Clone, Debug, PartialEq)]
+/// The window while it is open.
+#[derive(Clone, Debug, Default)]
 pub struct ArrayDlgState {
-    pub kind: ArrayKind,
-    pub rows: u32,
-    pub cols: u32,
-    pub col_spacing: f64,
-    pub row_spacing: f64,
-    pub axis_angle: f64,
-    pub levels: u32,
-    pub level_spacing: f64,
-    pub associative: bool,
-    pub count: u32,
-    pub fill_angle: f64,
-    pub rotate: bool,
-    pub center: [f64; 2],
-    /// A HATCHPICK (oRigin) is running.
-    pub picking: bool,
-    /// The last command error, shown in the dialog.
+    /// The last refused value, shown in the window.
     pub error: Option<String>,
-    /// The drawing the dialog belongs to (`DocState::uid`).
+    /// The drawing the window belongs to (`DocState::uid`).
     pub uid: u64,
     /// The space it belongs to (`DocState::edit_space`).
     pub space: Space,
 }
 
-/// The centre of the selection's union bounds, or `[0.0, 0.0]` when empty or non-finite.
-fn selection_center(doc: &cadcraft_doc::Drawing, handles: &[Handle]) -> [f64; 2] {
+/// The command each array kind runs.
+fn command(kind: ArrayLiveKind) -> &'static str {
+    match kind {
+        ArrayLiveKind::Rectangular => "arrayrect",
+        ArrayLiveKind::Polar => "arraypolar",
+    }
+}
+
+/// The centre of the selection's union bounds, when it is finite.
+fn selection_center(app: &CadApp) -> Option<Vec2> {
+    let st = app.session.state().ok()?;
     let mut b = cadcraft_geom::Bounds2::EMPTY;
-    for h in handles {
-        if let Some(e) = doc.entity(*h) {
-            b = b.union(&cadcraft_doc::entity_bounds(doc, e, 0));
+    for h in st.shown_selection() {
+        if let Some(e) = st.doc.entity(h) {
+            b = b.union(&cadcraft_doc::entity_bounds(&st.doc, e, 0));
         }
     }
     let c = b.center();
-    if c.x.is_finite() && c.y.is_finite() { [c.x, c.y] } else { [0.0, 0.0] }
+    (c.x.is_finite() && c.y.is_finite()).then_some(c)
 }
 
-/// Open the window on the current drawing's selection.
-pub fn open(app: &mut CadApp, kind: ArrayKind) {
-    let Ok(st) = app.session.state() else { return };
-    let mut dlg = ArrayDlgState {
-        kind,
-        rows: 3,
-        cols: 4,
-        col_spacing: 1.0,
-        row_spacing: 1.0,
-        axis_angle: 0.0,
-        levels: 1,
-        level_spacing: 1.0,
-        associative: st.doc.header.i64("ARRAYASSOCIATIVITY", 1) != 0,
-        count: 6,
-        fill_angle: 360.0,
-        rotate: true,
-        center: [0.0, 0.0],
-        picking: false,
-        error: None,
-        uid: st.uid,
-        space: st.edit_space(),
+/// Start the real command and open the window on it.
+pub fn open(app: &mut CadApp, kind: ArrayLiveKind) {
+    let (uid, space, center) = {
+        let Ok(st) = app.session.state() else { return };
+        (st.uid, st.edit_space(), selection_center(app))
     };
-    if kind == ArrayKind::Polar {
-        let handles = st.shown_selection();
-        dlg.center = selection_center(&st.doc, &handles);
-    }
-    app.array_dlg = Some(dlg);
-    app.ui.dialog = Some("array".into());
-}
-
-/// Hide the dialog and run HATCHPICK for the centre; [`resume`] brings the dialog back.
-fn start_pick(app: &mut CadApp) {
-    let Some(st) = app.array_dlg.as_mut() else { return };
-    st.picking = true;
-    st.error = None;
-    app.session.hatch_picks = None;
-    app.ui.dialog = None;
-    app.start("hatchpick");
-    if app.session.running.is_some()
-        && let Err(e) = app.session.input(cadcraft_engine::Input::Keyword("oRigin".into()))
-    {
+    // The session, not `CadApp::start`: that one would come back here through the UI commands.
+    if let Err(e) = app.session.start(command(kind)) {
         app.session.echo(e.to_string());
-    }
-}
-
-/// Every frame: restore the window after its centre pick ended.
-pub fn resume(app: &mut CadApp) {
-    if !app.array_dlg.as_ref().is_some_and(|s| s.picking) {
         return;
     }
-    if app.session.running.is_some() {
-        return;
+    if kind == ArrayLiveKind::Polar
+        && let (Some(c), Some(mut live)) = (center, app.session.array_live())
+    {
+        live.center = Some(c);
+        if let Err(e) = app.session.set_array_live(&live) {
+            app.session.echo(e.to_string());
+        }
     }
-    let picks = app.session.hatch_picks.take();
-    let here = app.session.state().ok().map(|s| (s.uid, s.edit_space()));
-    let Some(mut st) = app.array_dlg.take() else { return };
-    if here != Some((st.uid, st.space.clone())) {
-        return;
-    }
-    st.picking = false;
-    if let Some(q) = picks.and_then(|p| p.origin) {
-        st.center = [q.x, q.y];
-        st.error = None;
-    }
-    app.array_dlg = Some(st);
+    app.array_dlg = Some(ArrayDlgState { error: None, uid, space });
     app.ui.dialog = Some("array".into());
 }
 
-/// (command id, JSON params) for the state and handles.
-fn params(st: &ArrayDlgState, handles: &[Handle]) -> (&'static str, Value) {
-    let hx = json!(handles.iter().map(|h| h.hex()).collect::<Vec<_>>());
-    match st.kind {
-        ArrayKind::Rectangular => (
-            "arrayrect",
-            json!({
-                "handles": hx,
-                "rows": st.rows,
-                "cols": st.cols,
-                "colSpacing": st.col_spacing,
-                "rowSpacing": st.row_spacing,
-                "axisAngle": st.axis_angle,
-                "levels": st.levels,
-                "levelSpacing": st.level_spacing,
-                "associative": st.associative,
-            }),
-        ),
-        ArrayKind::Polar => (
-            "arraypolar",
-            json!({
-                "handles": hx,
-                "center": [st.center[0], st.center[1]],
-                "count": st.count,
-                "angle": st.fill_angle,
-                "rotate": st.rotate,
-                "rows": st.rows,
-                "rowSpacing": st.row_spacing,
-                "levels": st.levels,
-                "levelSpacing": st.level_spacing,
-                "associative": st.associative,
-            }),
-        ),
-    }
-}
-
-/// The numbers `ok` refuses when any is not finite.
-fn all_finite(st: &ArrayDlgState) -> bool {
-    [st.col_spacing, st.row_spacing, st.axis_angle, st.level_spacing, st.fill_angle, st.center[0], st.center[1]].iter().all(|v| v.is_finite())
-}
-
-/// OK: run ARRAYRECT/ARRAYPOLAR. True when the dialog closes.
+/// OK: finish the running array. True when the window closes.
 pub fn ok(app: &mut CadApp) -> bool {
-    let Some(handles) = app.session.state().ok().map(|s| s.shown_selection()) else { return true };
-    let Some(st) = app.array_dlg.as_ref() else { return true };
-    if handles.is_empty() {
-        if let Some(s) = app.array_dlg.as_mut() {
-            s.error = Some("Select objects first".into());
-        }
-        return false;
+    if app.session.array_live().is_none() {
+        return true;
     }
-    if !all_finite(st) {
-        if let Some(s) = app.array_dlg.as_mut() {
-            s.error = Some("Values must be finite".into());
-        }
-        return false;
-    }
-    let (cmd, p) = params(st, &handles);
-    match app.run(cmd, p) {
-        Ok(_) => {
+    match app.session.commit_array() {
+        Ok(true) => {
             app.array_dlg = None;
             true
         }
+        Ok(false) => false,
         Err(e) => {
-            if let Some(s) = app.array_dlg.as_mut() {
-                s.error = Some(e);
+            if let Some(st) = app.array_dlg.as_mut() {
+                st.error = Some(e.to_string());
             }
             false
         }
@@ -206,107 +96,136 @@ fn count_field(ui: &mut egui::Ui, v: &mut u32) {
     ui.add(egui::DragValue::new(v).range(1..=1_000_000));
 }
 
-/// Draw the window when `app.ui.dialog == Some("array")`.
+/// The fields both kinds have; the counts come back through the caller's locals.
+fn common_fields(ui: &mut egui::Ui, rows: &mut u32, levels: &mut u32, live: &mut ArrayLive) {
+    egui::Grid::new("array_common").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
+        ui.label(crate::tl!("Rows"));
+        count_field(ui, rows);
+        ui.end_row();
+        ui.label(crate::tl!("Levels"));
+        count_field(ui, levels);
+        ui.end_row();
+        ui.label(crate::tl!("Row spacing"));
+        ui.add(egui::DragValue::new(&mut live.row_spacing).speed(0.1));
+        ui.end_row();
+        ui.label(crate::tl!("Level spacing"));
+        ui.add(egui::DragValue::new(&mut live.level_spacing).speed(0.1));
+        ui.end_row();
+        ui.label(crate::tl!("Row elevation"));
+        ui.add(egui::DragValue::new(&mut live.row_elevation).speed(0.1));
+        ui.end_row();
+    });
+    ui.checkbox(&mut live.associative, crate::tl!("Associative"));
+}
+
+/// The rectangular-only fields.
+fn rect_fields(ui: &mut egui::Ui, cols: &mut u32, live: &mut ArrayLive) {
+    egui::Grid::new("array_rect").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
+        ui.label(crate::tl!("Columns"));
+        count_field(ui, cols);
+        ui.end_row();
+        ui.label(crate::tl!("Column spacing"));
+        ui.add(egui::DragValue::new(&mut live.col_spacing).speed(0.1));
+        ui.end_row();
+    });
+}
+
+/// The polar-only fields. "Pick center" asks the running command for the point; the window stays.
+fn polar_fields(ui: &mut egui::Ui, center: &mut Vec2, items: &mut u32, live: &mut ArrayLive, action: &mut Action) {
+    egui::Grid::new("array_polar").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
+        ui.label(crate::tl!("Center X"));
+        ui.add(egui::DragValue::new(&mut center.x).speed(0.1));
+        ui.end_row();
+        ui.label(crate::tl!("Center Y"));
+        ui.add(egui::DragValue::new(&mut center.y).speed(0.1));
+        ui.end_row();
+        ui.label("");
+        if ui.button(crate::tl!("Pick center")).clicked() {
+            *action = Action::PickCenter;
+        }
+        ui.end_row();
+        ui.label(crate::tl!("Items"));
+        count_field(ui, items);
+        ui.end_row();
+        ui.label(crate::tl!("Fill angle"));
+        ui.add(egui::DragValue::new(&mut live.fill).speed(1.0).suffix("°"));
+        ui.end_row();
+        ui.label("");
+        ui.checkbox(&mut live.rotate, crate::tl!("Rotate items"));
+        ui.end_row();
+    });
+}
+
+/// Draw the window while `app.ui.dialog == Some("array")`.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    if app.array_dlg.is_none() {
-        return;
-    }
+    let Some(st) = app.array_dlg.clone() else { return };
     let here = app.session.state().ok().map(|s| (s.uid, s.edit_space()));
-    let Some(mut st) = app.array_dlg.take().filter(|s| here.as_ref() == Some(&(s.uid, s.space.clone()))) else {
+    let Some(live) = app.session.array_live() else {
+        app.array_dlg = None;
         *open = false;
         return;
     };
-    let handles = app.session.state().map(|s| s.shown_selection()).unwrap_or_default();
+    if here != Some((st.uid, st.space)) {
+        app.array_dlg = None;
+        *open = false;
+        return;
+    }
+    let selecting = app.session.current_prompt().is_some_and(|p| p.accept.select);
+    let title = match live.kind {
+        ArrayLiveKind::Rectangular => crate::tl!("Rectangular Array"),
+        ArrayLiveKind::Polar => crate::tl!("Polar Array"),
+    };
+    let mut edited = live.clone();
+    let mut cols = live.cols.min(u64::from(u32::MAX)) as u32;
+    let mut rows = live.rows.min(u64::from(u32::MAX)) as u32;
+    let mut levels = live.levels.min(u64::from(u32::MAX)) as u32;
+    let mut items = live.items.min(u64::from(u32::MAX)) as u32;
+    let mut center = live.center.unwrap_or(Vec2::ZERO);
     let mut action = Action::None;
-    egui::Window::new(crate::tl!("Array")).id(egui::Id::unique("array_dialog")).open(open).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut st.kind, ArrayKind::Rectangular, crate::tl!("Rectangular"));
-            ui.selectable_value(&mut st.kind, ArrayKind::Polar, crate::tl!("Polar"));
-        });
-        ui.separator();
-        match st.kind {
-            ArrayKind::Rectangular => {
-                egui::Grid::new("array_rect").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
-                    ui.label(crate::tl!("Rows"));
-                    count_field(ui, &mut st.rows);
-                    ui.end_row();
-                    ui.label(crate::tl!("Columns"));
-                    count_field(ui, &mut st.cols);
-                    ui.end_row();
-                    ui.label(crate::tl!("Column spacing"));
-                    ui.add(egui::DragValue::new(&mut st.col_spacing).speed(0.1));
-                    ui.end_row();
-                    ui.label(crate::tl!("Row spacing"));
-                    ui.add(egui::DragValue::new(&mut st.row_spacing).speed(0.1));
-                    ui.end_row();
-                    ui.label(crate::tl!("Axis angle"));
-                    ui.add(egui::DragValue::new(&mut st.axis_angle).speed(1.0).suffix("°"));
-                    ui.end_row();
-                    ui.label(crate::tl!("Levels"));
-                    count_field(ui, &mut st.levels);
-                    ui.end_row();
-                    ui.label(crate::tl!("Level spacing"));
-                    ui.add(egui::DragValue::new(&mut st.level_spacing).speed(0.1));
-                    ui.end_row();
-                });
-                ui.checkbox(&mut st.associative, crate::tl!("Associative"));
-            }
-            ArrayKind::Polar => {
-                egui::Grid::new("array_polar").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
-                    ui.label(crate::tl!("Center X"));
-                    ui.add(egui::DragValue::new(&mut st.center[0]).speed(0.1));
-                    ui.end_row();
-                    ui.label(crate::tl!("Center Y"));
-                    ui.add(egui::DragValue::new(&mut st.center[1]).speed(0.1));
-                    ui.end_row();
-                    ui.label("");
-                    if ui.button(crate::tl!("Pick center")).clicked() {
-                        action = Action::PickCenter;
-                    }
-                    ui.end_row();
-                    ui.label(crate::tl!("Items"));
-                    count_field(ui, &mut st.count);
-                    ui.end_row();
-                    ui.label(crate::tl!("Fill angle"));
-                    ui.add(egui::DragValue::new(&mut st.fill_angle).speed(1.0).suffix("°"));
-                    ui.end_row();
-                    ui.label("");
-                    ui.checkbox(&mut st.rotate, crate::tl!("Rotate items"));
-                    ui.end_row();
-                    ui.label(crate::tl!("Rows"));
-                    count_field(ui, &mut st.rows);
-                    ui.end_row();
-                    ui.label(crate::tl!("Row spacing"));
-                    ui.add(egui::DragValue::new(&mut st.row_spacing).speed(0.1));
-                    ui.end_row();
-                    ui.label(crate::tl!("Levels"));
-                    count_field(ui, &mut st.levels);
-                    ui.end_row();
-                    ui.label(crate::tl!("Level spacing"));
-                    ui.add(egui::DragValue::new(&mut st.level_spacing).speed(0.1));
-                    ui.end_row();
-                });
-                ui.checkbox(&mut st.associative, crate::tl!("Associative"));
-            }
+    egui::Window::new(title).id(egui::Id::unique("array_dialog")).open(open).collapsible(false).resizable(false).show(ctx, |ui| {
+        match live.kind {
+            ArrayLiveKind::Rectangular => rect_fields(ui, &mut cols, &mut edited),
+            ArrayLiveKind::Polar => polar_fields(ui, &mut center, &mut items, &mut edited, &mut action),
         }
+        common_fields(ui, &mut rows, &mut levels, &mut edited);
         if let Some(e) = &st.error {
             ui.colored_label(Tokens::get().warn, e);
         }
         ui.separator();
         ui.horizontal(|ui| {
-            let ready = !handles.is_empty();
-            if ui.add_enabled(ready, egui::Button::new(crate::tl!("OK"))).clicked() {
+            if ui.add_enabled(!selecting, egui::Button::new(crate::tl!("OK"))).clicked() {
                 action = Action::Ok;
             }
             if ui.button(crate::tl!("Cancel")).clicked() {
                 action = Action::Cancel;
             }
-            if handles.is_empty() {
+            if selecting {
                 ui.label(crate::tl!("Select objects first"));
             }
         });
     });
-    app.array_dlg = Some(st);
+    edited.cols = u64::from(cols);
+    edited.rows = u64::from(rows);
+    edited.levels = u64::from(levels);
+    edited.items = u64::from(items);
+    if live.kind == ArrayLiveKind::Polar && live.center.is_some() {
+        edited.center = Some(center);
+    }
+    // Only the running command draws; a refused value is reported and the old one stays.
+    if edited != live {
+        match app.session.set_array_live(&edited) {
+            Ok(()) => {
+                if let Some(s) = app.array_dlg.as_mut() {
+                    s.error = None;
+                }
+            }
+            Err(e) => {
+                if let Some(s) = app.array_dlg.as_mut() {
+                    s.error = Some(e.to_string());
+                }
+            }
+        }
+    }
     match action {
         Action::Ok => {
             if ok(app) {
@@ -314,15 +233,19 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             }
         }
         Action::Cancel => {
+            app.session.cancel();
             app.array_dlg = None;
             *open = false;
         }
-        Action::PickCenter => start_pick(app),
-        Action::None => {
-            if !*open {
-                app.array_dlg = None;
-            }
+        Action::PickCenter => {
+            app.session.array_pick_center();
         }
+        // The window's X: Cancel.
+        Action::None if !*open => {
+            app.session.cancel();
+            app.array_dlg = None;
+        }
+        Action::None => {}
     }
 }
 

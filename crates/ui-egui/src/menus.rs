@@ -591,14 +591,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
             Ok(Value::Null)
         }
-        // Typed or from a menu (no parameters) these open the Array dialog; ARRAYRECT and
-        // ARRAYPOLAR on their tab. -ARRAY and JSON calls keep the command line and the JSON form.
-        "array" | "ar" | "arrayrect" if params.is_null() => {
-            crate::arraydlg::open(app, crate::arraydlg::ArrayKind::Rectangular);
+        // Typed or from a menu (no parameters): ARRAYRECT and ARRAYPOLAR start the real command and
+        // open the Array window on it. ARRAY and -ARRAY stay on the command line, and JSON calls
+        // keep the JSON form.
+        "arrayrect" if params.is_null() => {
+            crate::arraydlg::open(app, cadcraft_engine::ArrayLiveKind::Rectangular);
             Ok(Value::Null)
         }
         "arraypolar" if params.is_null() => {
-            crate::arraydlg::open(app, crate::arraydlg::ArrayKind::Polar);
+            crate::arraydlg::open(app, cadcraft_engine::ArrayLiveKind::Polar);
             Ok(Value::Null)
         }
         // Typed or from the Tools menu: the Command Aliases dialog. JSON calls keep the JSON form.

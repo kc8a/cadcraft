@@ -1,5 +1,6 @@
-use cadcraft_doc::{Handle, Space};
-use cadcraft_engine::Session;
+use cadcraft_doc::Space;
+use cadcraft_engine::doc::Handle;
+use cadcraft_engine::{ArrayLiveKind, Session};
 use cadcraft_geom::Vec2;
 use serde_json::json;
 
@@ -17,6 +18,14 @@ fn app_with_rect() -> (CadApp, Handle) {
     (CadApp::new(s, Services::default()), r)
 }
 
+/// A selected rectangle: the array commands go straight to their option loop.
+fn ready(kind: ArrayLiveKind) -> (CadApp, Handle) {
+    let (mut app, r) = app_with_rect();
+    app.session.set_selection(vec![r]);
+    open(&mut app, kind);
+    (app, r)
+}
+
 fn frames(app: &mut CadApp) -> egui::Context {
     let ctx = egui::Context::default();
     app.logic(&ctx);
@@ -29,157 +38,81 @@ fn frames(app: &mut CadApp) -> egui::Context {
 }
 
 #[test]
-fn open_defaults_and_draws() {
+fn open_starts_the_command_and_opens_the_window() {
     let (mut app, r) = app_with_rect();
     app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
+    open(&mut app, ArrayLiveKind::Rectangular);
     assert_eq!(app.ui.dialog.as_deref(), Some("array"));
     let st = app.array_dlg.clone().unwrap();
-    assert_eq!(st.kind, ArrayKind::Rectangular);
-    assert_eq!((st.rows, st.cols, st.levels, st.count), (3, 4, 1, 6));
-    assert_eq!((st.col_spacing, st.row_spacing, st.axis_angle, st.level_spacing), (1.0, 1.0, 0.0, 1.0));
-    assert_eq!((st.fill_angle, st.rotate), (360.0, true));
-    assert_eq!(st.center, [0.0, 0.0], "rectangular leaves the centre at zero");
-    assert!(st.associative);
-    assert!(!st.picking);
+    assert_eq!(st.space, Space::Model);
+    assert_eq!(st.error, None);
+    // The real command runs: the command line keeps its prompts and the canvas its preview.
+    assert_eq!(app.session.running.as_ref().map(|r| r.id.as_str()), Some("arrayrect"));
+    let live = app.session.array_live().unwrap();
+    assert_eq!(live.kind, ArrayLiveKind::Rectangular);
+    assert_eq!((live.cols, live.rows, live.levels), (4, 3, 1));
+    assert_eq!(live.center, None);
 }
 
 #[test]
 fn open_polar_centres_on_the_selection() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Polar);
-    assert_eq!(app.array_dlg.clone().unwrap().center, [5.0, 5.0]);
-    // An empty selection gives [0, 0].
+    let (app, _) = ready(ArrayLiveKind::Polar);
+    assert_eq!(app.session.array_live().unwrap().center, Some(Vec2::new(5.0, 5.0)));
+    // An empty selection leaves the command's own centre.
     let (mut app, _) = app_with_rect();
-    open(&mut app, ArrayKind::Polar);
-    assert_eq!(app.array_dlg.clone().unwrap().center, [0.0, 0.0]);
-}
-
-#[test]
-fn open_reads_the_header_for_associative() {
-    let (mut s, _) = session_with_rect();
-    s.execute("setvar", &json!({ "name": "ARRAYASSOCIATIVITY", "value": 0 })).unwrap();
-    let mut app = CadApp::new(s, Services::default());
-    open(&mut app, ArrayKind::Rectangular);
-    assert!(!app.array_dlg.clone().unwrap().associative);
+    open(&mut app, ArrayLiveKind::Polar);
+    assert_eq!(app.session.array_live().unwrap().center, Some(Vec2::ZERO));
 }
 
 #[test]
 fn open_without_a_drawing_changes_nothing() {
     let mut app = CadApp::new(Session::empty(), Services::default());
     app.ui.dialog = Some("layers".into());
-    open(&mut app, ArrayKind::Rectangular);
+    open(&mut app, ArrayLiveKind::Rectangular);
     assert_eq!(app.ui.dialog.as_deref(), Some("layers"));
     assert!(app.array_dlg.is_none());
 }
 
 #[test]
-fn params_rectangular_and_polar() {
-    let mut st = ArrayDlgState {
-        kind: ArrayKind::Rectangular,
-        rows: 3,
-        cols: 4,
-        col_spacing: 2.0,
-        row_spacing: 1.5,
-        axis_angle: 30.0,
-        levels: 2,
-        level_spacing: 0.5,
-        associative: true,
-        count: 6,
-        fill_angle: 360.0,
-        rotate: true,
-        center: [1.0, 2.0],
-        picking: false,
-        error: None,
-        uid: 1,
-        space: Space::Model,
-    };
-    let h = Handle::parse_hex("1F").unwrap();
-    let (cmd, p) = params(&st, &[h]);
-    assert_eq!(cmd, "arrayrect");
-    assert_eq!(p["handles"], json!([h.hex()]));
-    assert_eq!((p["rows"].as_u64(), p["cols"].as_u64(), p["levels"].as_u64()), (Some(3), Some(4), Some(2)));
-    assert_eq!(
-        (p["colSpacing"].as_f64(), p["rowSpacing"].as_f64(), p["axisAngle"].as_f64(), p["levelSpacing"].as_f64()),
-        (Some(2.0), Some(1.5), Some(30.0), Some(0.5))
-    );
-    assert_eq!(p["associative"], json!(true));
-    assert!(p.get("center").is_none() && p.get("count").is_none() && p.get("base").is_none() && p.get("keyPoint").is_none());
-
-    st.kind = ArrayKind::Polar;
-    st.center = [4.0, 5.0];
-    st.count = 6;
-    st.fill_angle = 180.0;
-    st.rotate = false;
-    let (cmd, p) = params(&st, &[h]);
-    assert_eq!(cmd, "arraypolar");
-    assert_eq!(p["center"], json!([4.0, 5.0]));
-    assert_eq!(p["count"], json!(6));
-    assert_eq!(p["angle"], json!(180.0));
-    assert_eq!(p["rotate"], json!(false));
-    assert_eq!(p["rowSpacing"], json!(1.5));
-    assert!(p.get("cols").is_none() && p.get("colSpacing").is_none() && p.get("base").is_none());
-}
-
-#[test]
-fn ok_with_no_state_returns_true() {
+fn ok_with_no_live_array_returns_true() {
     let mut app = CadApp::new(Session::new(), Services::default());
     assert!(ok(&mut app));
 }
 
 #[test]
-fn ok_with_an_empty_selection_keeps_the_dialog_with_an_error() {
-    let (mut app, _) = app_with_rect();
-    open(&mut app, ArrayKind::Rectangular);
-    let n = app.session.doc().unwrap().model.len();
-    assert!(!ok(&mut app));
-    let st = app.array_dlg.clone().unwrap();
-    assert_eq!(st.error.as_deref(), Some("Select objects first"));
-    assert_eq!(app.session.doc().unwrap().model.len(), n, "drawing unchanged");
-}
-
-#[test]
-fn ok_with_a_non_finite_value_keeps_the_dialog() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.row_spacing = f64::NAN;
-    }
-    let n = app.session.doc().unwrap().model.len();
-    assert!(!ok(&mut app));
-    assert_eq!(app.array_dlg.clone().unwrap().error.as_deref(), Some("Values must be finite"));
-    assert_eq!(app.session.doc().unwrap().model.len(), n, "drawing unchanged");
-}
-
-#[test]
-fn ok_runs_and_makes_copies() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.associative = false;
-    }
-    let before = app.session.doc().unwrap().model.len();
+fn ok_commits_the_running_array() {
+    let (mut app, _) = ready(ArrayLiveKind::Rectangular);
     assert!(ok(&mut app));
     assert!(app.array_dlg.is_none());
-    assert!(app.session.doc().unwrap().model.len() > before, "copies created");
+    assert!(app.session.running.is_none());
+    assert!(app.session.array_live().is_none());
+    let n = app.session.doc().unwrap().model.iter().filter(|e| matches!(&e.kind, cadcraft_doc::EntityKind::Insert(_))).count();
+    assert_eq!(n, 1, "the array was not created");
 }
 
 #[test]
-fn ok_refuses_a_zero_fill_angle_with_the_engine_error() {
+fn ok_while_selecting_keeps_the_window() {
+    let (mut app, _) = app_with_rect();
+    open(&mut app, ArrayLiveKind::Rectangular);
+    assert!(app.session.current_prompt().is_some_and(|p| p.accept.select));
+    assert!(!ok(&mut app));
+    assert!(app.array_dlg.is_some());
+    assert!(app.session.running.is_some());
+}
+
+#[test]
+fn ok_reports_a_refused_commit_and_stays_open() {
     let (mut app, r) = app_with_rect();
     app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Polar);
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.fill_angle = 0.0;
-    }
-    let n = app.session.doc().unwrap().model.len();
-    assert!(!ok(&mut app));
-    let st = app.array_dlg.clone().unwrap();
-    assert!(st.error.as_deref().is_some_and(|e| e.to_lowercase().contains("fill angle")), "{:?}", st.error);
-    assert_eq!(app.session.doc().unwrap().model.len(), n, "drawing unchanged");
+    open(&mut app, ArrayLiveKind::Rectangular);
+    // A value the engine refuses: the fill angle of a polar array.
+    app.session.cancel();
+    open(&mut app, ArrayLiveKind::Polar);
+    let mut live = app.session.array_live().unwrap();
+    live.fill = 0.0;
+    assert!(app.session.set_array_live(&live).is_err(), "the engine must refuse it");
+    // The window is still bound to the command; committing it succeeds normally.
+    assert!(ok(&mut app));
 }
 
 #[test]
@@ -193,129 +126,99 @@ fn dialog_returns_immediately_without_state() {
 
 #[test]
 fn dialog_draws_both_kinds_and_stays_open() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
+    let (mut app, _) = ready(ArrayLiveKind::Rectangular);
     frames(&mut app);
     assert_eq!(app.ui.dialog.as_deref(), Some("array"));
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.kind = ArrayKind::Polar;
-    }
-    frames(&mut app);
-    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
-}
-
-#[test]
-fn dialog_drops_on_a_layout_switch() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
-    app.run("layout", json!({ "option": "set", "name": "Layout1" })).unwrap();
-    frames(&mut app);
-    assert_eq!(app.array_dlg, None);
-}
-
-#[test]
-fn pick_center_hides_the_dialog_and_restores_it_with_the_origin() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Polar);
-    let before = app.array_dlg.clone().unwrap();
-    // Start the pick the way the "Pick center" button does.
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.picking = true;
-    }
-    app.session.hatch_picks = None;
-    app.ui.dialog = None;
-    app.start("hatchpick");
-    app.session.input(cadcraft_engine::Input::Keyword("oRigin".into())).unwrap();
-    assert_eq!(app.ui.dialog, None, "hidden while picking");
-    resume(&mut app);
-    assert_eq!(app.ui.dialog, None, "still picking");
-    app.session.input(cadcraft_engine::Input::Point(Vec2::new(3.0, 4.0))).unwrap();
-    resume(&mut app);
-    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
-    let st = app.array_dlg.clone().unwrap();
-    assert!(!st.picking);
-    assert_eq!(st.center, [3.0, 4.0]);
-    assert_eq!(st.rows, before.rows, "the other fields are kept");
-}
-
-#[test]
-fn pick_center_cancelled_keeps_the_center() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Polar);
-    let before = app.array_dlg.clone().unwrap();
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.picking = true;
-    }
-    app.session.hatch_picks = None;
-    app.ui.dialog = None;
-    app.start("hatchpick");
-    app.session.input(cadcraft_engine::Input::Keyword("oRigin".into())).unwrap();
     app.session.cancel();
-    resume(&mut app);
+    open(&mut app, ArrayLiveKind::Polar);
+    frames(&mut app);
     assert_eq!(app.ui.dialog.as_deref(), Some("array"));
-    assert_eq!(app.array_dlg.clone().unwrap().center, before.center);
 }
 
 #[test]
-fn pick_center_on_another_drawing_drops_the_state() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Polar);
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.picking = true;
-    }
-    app.ui.dialog = None;
+fn dialog_follows_the_command_line_and_the_window_writes_back() {
+    let (mut app, _) = ready(ArrayLiveKind::Rectangular);
+    // The command line changes the columns: the next frame shows them.
+    app.session.cmdline("columns").unwrap();
+    app.session.cmdline("6").unwrap();
+    frames(&mut app);
+    assert_eq!(app.session.array_live().unwrap().cols, 6);
+    // The window changes the rows through set_array_live.
+    let mut v = app.session.array_live().unwrap();
+    v.rows = 5;
+    app.session.set_array_live(&v).unwrap();
+    assert_eq!(app.session.array_live().unwrap().rows, 5);
+}
+
+#[test]
+fn dialog_keeps_the_old_values_when_a_value_is_refused() {
+    let (mut app, _) = ready(ArrayLiveKind::Polar);
+    let before = app.session.array_live().unwrap();
+    let mut bad = before.clone();
+    bad.fill = 0.0;
+    assert!(app.session.set_array_live(&bad).is_err());
+    assert_eq!(app.session.array_live().unwrap(), before, "the old values stay");
+    frames(&mut app);
+    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
+}
+
+#[test]
+fn dialog_closes_when_the_command_ends_from_the_command_line() {
+    let (mut app, _) = ready(ArrayLiveKind::Rectangular);
+    app.session.cmdline("x").unwrap();
+    assert!(app.session.running.is_none());
+    frames(&mut app);
+    assert!(app.array_dlg.is_none());
+    assert_eq!(app.ui.dialog, None);
+}
+
+#[test]
+fn dialog_drops_on_a_drawing_switch() {
+    let (mut app, _) = ready(ArrayLiveKind::Rectangular);
     app.session.new_drawing(false);
-    resume(&mut app);
-    assert_eq!(app.array_dlg, None);
-    assert_eq!(app.ui.dialog, None);
-}
-
-#[test]
-fn typed_and_menu_commands_open_the_dialog_but_dash_and_json_do_not() {
-    let (mut app, r) = app_with_rect();
-    app.session.set_selection(vec![r]);
-    for (typed, kind) in
-        [("array", ArrayKind::Rectangular), ("ar", ArrayKind::Rectangular), ("arrayrect", ArrayKind::Rectangular), ("arraypolar", ArrayKind::Polar)]
-    {
-        app.ui.dialog = None;
-        app.array_dlg = None;
-        app.cmdline(typed);
-        assert_eq!(app.ui.dialog.as_deref(), Some("array"), "{typed}");
-        assert_eq!(app.array_dlg.clone().unwrap().kind, kind, "{typed}");
-        assert!(app.session.running.is_none(), "{typed} must not start the command line");
-    }
-    app.ui.dialog = None;
-    app.start("arrayrect");
-    assert_eq!(app.ui.dialog.as_deref(), Some("array"), "menu");
-    // -ARRAY: the command line.
-    app.ui.dialog = None;
-    app.array_dlg = None;
-    app.cmdline("-array");
-    assert_eq!(app.ui.dialog, None);
-    assert!(app.session.running.is_some());
-    app.session.cancel();
-    // JSON: runs, never opens.
-    app.ui.dialog = None;
-    app.array_dlg = None;
-    app.run("arrayrect", json!({ "handles": [r.hex()], "rows": 2, "cols": 2, "associative": false })).unwrap();
-    assert_eq!(app.ui.dialog, None);
+    frames(&mut app);
     assert!(app.array_dlg.is_none());
 }
 
 #[test]
-fn params_never_fails_on_state_built_with_zero_counts() {
-    // The widgets clamp to 1..=1_000_000; a state built directly with 0 shows the engine error.
+fn pick_center_asks_the_command_and_keeps_the_window() {
+    let (mut app, _) = ready(ArrayLiveKind::Polar);
+    // The "Pick center" button.
+    assert!(app.session.array_pick_center());
+    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
+    frames(&mut app);
+    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
+    // The command asks for the point; feeding it moves it on and the window follows.
+    app.session.input(cadcraft_engine::Input::Point(Vec2::new(3.0, 4.0))).unwrap();
+    assert_eq!(app.session.array_live().unwrap().center, Some(Vec2::new(3.0, 4.0)));
+    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
+}
+
+#[test]
+fn menu_and_typed_commands_open_the_window_but_json_does_not() {
+    for (typed, kind) in [("arrayrect", ArrayLiveKind::Rectangular), ("arraypolar", ArrayLiveKind::Polar), ("ARRAYRECT", ArrayLiveKind::Rectangular)]
+    {
+        let (mut app, r) = app_with_rect();
+        app.session.set_selection(vec![r]);
+        app.cmdline(typed);
+        assert_eq!(app.ui.dialog.as_deref(), Some("array"), "{typed}");
+        assert_eq!(app.session.array_live().unwrap().kind, kind, "{typed}");
+        assert!(app.session.running.is_some(), "{typed} runs the command");
+        app.session.cancel();
+    }
+    // ARRAY and -ARRAY stay on the command line.
+    for typed in ["array", "-array"] {
+        let (mut app, r) = app_with_rect();
+        app.session.set_selection(vec![r]);
+        app.cmdline(typed);
+        assert_eq!(app.ui.dialog, None, "{typed}");
+        assert!(app.session.running.is_some(), "{typed}");
+        app.session.cancel();
+    }
+    // JSON: runs, never opens.
     let (mut app, r) = app_with_rect();
     app.session.set_selection(vec![r]);
-    open(&mut app, ArrayKind::Rectangular);
-    if let Some(st) = app.array_dlg.as_mut() {
-        st.rows = 0;
-    }
-    assert!(!ok(&mut app));
-    assert!(app.array_dlg.clone().unwrap().error.as_deref().is_some_and(|e| !e.is_empty()));
+    app.run("arrayrect", json!({ "handles": [r.hex()], "rows": 2, "cols": 2, "associative": false })).unwrap();
+    assert_eq!(app.ui.dialog, None);
+    assert!(app.array_dlg.is_none());
 }
