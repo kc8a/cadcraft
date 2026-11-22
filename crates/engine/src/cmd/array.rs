@@ -692,6 +692,42 @@ impl RectM {
         };
         Ok(Step::Continue)
     }
+
+    fn live(&self) -> crate::ArrayLive {
+        crate::ArrayLive {
+            kind: crate::ArrayLiveKind::Rectangular,
+            cols: self.cols,
+            rows: self.rows,
+            col_spacing: self.cs,
+            row_spacing: self.rs,
+            levels: self.levels,
+            level_spacing: self.ls,
+            row_elevation: self.elev,
+            associative: self.assoc,
+            items: 0,
+            fill: 0.0,
+            rotate: false,
+            center: None,
+        }
+    }
+
+    /// Apply the array window's values: they are validated first, so a refused value leaves the
+    /// command exactly as it was.
+    fn apply_live(&mut self, v: &crate::ArrayLive) -> Result<()> {
+        if v.kind != crate::ArrayLiveKind::Rectangular {
+            return Err(other("That is a polar array; these are the rectangular parameters."));
+        }
+        if v.cols < 1 || v.rows < 1 || v.levels < 1 {
+            return Err(other("Requires at least one column, row and level."));
+        }
+        if ![v.col_spacing, v.row_spacing, v.level_spacing, v.row_elevation].iter().all(|d| d.is_finite()) {
+            return Err(other("Requires finite distances."));
+        }
+        (self.cols, self.rows, self.levels) = (v.cols, v.rows, v.levels);
+        (self.cs, self.rs, self.ls, self.elev) = (v.col_spacing, v.row_spacing, v.level_spacing, v.row_elevation);
+        self.assoc = v.associative;
+        Ok(())
+    }
 }
 
 fn yes(b: bool) -> &'static str {
@@ -704,6 +740,15 @@ fn assoc_prompt(cur: bool) -> Prompt {
 }
 
 impl Interactive for RectM {
+    fn array_live(&self) -> Option<crate::ArrayLive> {
+        Some(self.live())
+    }
+    fn set_array_live(&mut self, _s: &mut Session, v: &crate::ArrayLive) -> Result<()> {
+        self.apply_live(v)
+    }
+    fn array_set_main(&mut self) {
+        self.stage = RStage::Main;
+    }
     fn name(&self) -> &'static str {
         "ARRAYRECT"
     }
@@ -1083,9 +1128,74 @@ impl PolarM {
         };
         d.filter(|d| d.is_finite() && d.abs() > 1e-12).map(Some).ok_or_else(|| other("Requires a nonzero distance."))
     }
+    fn live(&self) -> crate::ArrayLive {
+        crate::ArrayLive {
+            kind: crate::ArrayLiveKind::Polar,
+            cols: 0,
+            rows: self.rows,
+            col_spacing: 0.0,
+            row_spacing: self.rs,
+            levels: self.levels,
+            level_spacing: self.ls,
+            row_elevation: self.elev,
+            associative: self.assoc,
+            items: self.items,
+            fill: self.fill,
+            rotate: self.rotate,
+            center: Some(self.center),
+        }
+    }
+
+    /// Apply the array window's values: they are validated first, so a refused value leaves the
+    /// command exactly as it was.
+    fn apply_live(&mut self, v: &crate::ArrayLive) -> Result<()> {
+        if v.kind != crate::ArrayLiveKind::Polar {
+            return Err(other("That is a rectangular array; these are the polar parameters."));
+        }
+        if v.items < 1 || v.rows < 1 || v.levels < 1 {
+            return Err(other("Requires at least one item, row and level."));
+        }
+        if !v.fill.is_finite() || v.fill.abs() <= 0.0 || v.fill.abs() > 360.0 {
+            return Err(other("Requires a fill angle between -360 and 360 degrees (not 0)."));
+        }
+        if ![v.row_spacing, v.level_spacing, v.row_elevation].iter().all(|d| d.is_finite()) {
+            return Err(other("Requires finite distances."));
+        }
+        if let Some(c) = v.center
+            && !c.is_finite()
+        {
+            return Err(other("Requires a finite center point."));
+        }
+        (self.items, self.rows, self.levels) = (v.items, v.rows, v.levels);
+        (self.rs, self.ls, self.elev) = (v.row_spacing, v.level_spacing, v.row_elevation);
+        self.fill = v.fill;
+        self.rotate = v.rotate;
+        self.assoc = v.associative;
+        // The centre is set and the command moves on, exactly as picking it does.
+        if let Some(c) = v.center
+            && self.stage == PStage::Center
+        {
+            self.center = c;
+            self.stage = PStage::Main;
+        }
+        Ok(())
+    }
 }
 
 impl Interactive for PolarM {
+    fn array_live(&self) -> Option<crate::ArrayLive> {
+        Some(self.live())
+    }
+    fn set_array_live(&mut self, _s: &mut Session, v: &crate::ArrayLive) -> Result<()> {
+        self.apply_live(v)
+    }
+    fn array_set_main(&mut self) {
+        self.stage = PStage::Main;
+    }
+    fn array_pick_center(&mut self) -> bool {
+        self.stage = PStage::Center;
+        true
+    }
     fn name(&self) -> &'static str {
         "ARRAYPOLAR"
     }
