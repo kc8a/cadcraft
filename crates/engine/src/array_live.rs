@@ -38,4 +38,7 @@ pub struct ArrayLive {
     pub rotate: bool,
     /// Polar: the centre; `None` for a rectangular array.
     pub center: Option<Vec2>,
+    /// Polar only: the angle between items, degrees, derived from items and fill.
+    /// `None` for Rectangular.
+    pub between: Option<f64>,
 }

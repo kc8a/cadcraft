@@ -368,6 +368,19 @@ fn preview_copies(s: &Session, hs: &[Handle], mats: impl Iterator<Item = Mat3>) 
 fn other(m: impl Into<String>) -> EngineError {
     EngineError::Other(m.into())
 }
+/// The fill angle (degrees) that gives `b` between `items` items, with the command
+/// line's own rule and error messages.
+fn fill_for_between(items: u64, b: f64) -> Result<f64> {
+    if !b.is_finite() || b.abs() < 1e-9 {
+        return Err(other("Requires a nonzero angle."));
+    }
+    let n = items.max(1) as f64;
+    let fill = if (b.abs() * n - 360.0).abs() < 1e-9 { 360.0 * b.signum() } else { b * (n - 1.0).max(1.0) };
+    if fill.abs() > 360.0 + 1e-9 {
+        return Err(other("The items would span more than 360 degrees; enter a smaller angle or fewer items."));
+    }
+    Ok(fill.clamp(-360.0, 360.0))
+}
 
 fn fmt(v: f64) -> String {
     format!("{v:.4}")
@@ -708,6 +721,7 @@ impl RectM {
             fill: 0.0,
             rotate: false,
             center: None,
+            between: None,
         }
     }
 
@@ -1143,6 +1157,7 @@ impl PolarM {
             fill: self.fill,
             rotate: self.rotate,
             center: Some(self.center),
+            between: Some(self.between()),
         }
     }
 
@@ -1155,7 +1170,14 @@ impl PolarM {
         if v.items < 1 || v.rows < 1 || v.levels < 1 {
             return Err(other("Requires at least one item, row and level."));
         }
-        if !v.fill.is_finite() || v.fill.abs() <= 0.0 || v.fill.abs() > 360.0 {
+        // The Angle between field derives the fill; an edited Fill angle always wins.
+        let between_changed = v.between.is_some_and(|b| !b.is_finite() || (b - self.between()).abs() > 1e-9);
+        let fill_changed = (v.fill - self.fill).abs() > 1e-9;
+        let fill = match v.between {
+            Some(b) if between_changed && !fill_changed => fill_for_between(v.items, b)?,
+            _ => v.fill,
+        };
+        if !fill.is_finite() || fill.abs() <= 0.0 || fill.abs() > 360.0 {
             return Err(other("Requires a fill angle between -360 and 360 degrees (not 0)."));
         }
         if ![v.row_spacing, v.level_spacing, v.row_elevation].iter().all(|d| d.is_finite()) {
@@ -1168,7 +1190,7 @@ impl PolarM {
         }
         (self.items, self.rows, self.levels) = (v.items, v.rows, v.levels);
         (self.rs, self.ls, self.elev) = (v.row_spacing, v.level_spacing, v.row_elevation);
-        self.fill = v.fill;
+        self.fill = fill;
         self.rotate = v.rotate;
         self.assoc = v.associative;
         // The centre is set and the command moves on, exactly as picking it does.
@@ -1351,15 +1373,7 @@ impl Interactive for PolarM {
             (Between, Input::Enter) => Main,
             (Between, _) => match angle(&i, self.between(), &s.angle_settings())? {
                 Some(b) => {
-                    if b.abs() < 1e-9 {
-                        return Err(other("Requires a nonzero angle."));
-                    }
-                    let n = self.items as f64;
-                    let fill = if (b.abs() * n - 360.0).abs() < 1e-9 { 360.0 * b.signum() } else { b * (n - 1.0).max(1.0) };
-                    if fill.abs() > 360.0 + 1e-9 {
-                        return Err(other("The items would span more than 360 degrees; enter a smaller angle or fewer items."));
-                    }
-                    self.fill = fill;
+                    self.fill = fill_for_between(self.items, b)?;
                     Main
                 }
                 None => stage,

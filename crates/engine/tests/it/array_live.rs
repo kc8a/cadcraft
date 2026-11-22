@@ -206,6 +206,7 @@ fn no_running_array_is_a_noop() {
         fill: 0.0,
         rotate: false,
         center: None,
+        between: None,
     };
     s.set_array_live(&v).unwrap();
     assert!(!s.array_pick_center());
@@ -244,4 +245,86 @@ fn commit_creates_polar_copies() {
     s.set_array_live(&v).unwrap();
     assert!(s.commit_array().unwrap());
     assert!(s.running.is_none());
+}
+#[test]
+fn rect_live_has_no_angle_between() {
+    let mut s = selected();
+    s.start("arrayrect").unwrap();
+    assert_eq!(s.array_live().unwrap().between, None);
+    // Writing the rectangular values leaves the polar-only field alone.
+    let mut v = s.array_live().unwrap();
+    v.between = Some(45.0);
+    s.set_array_live(&v).unwrap();
+    assert_eq!(s.array_live().unwrap().between, None);
+}
+
+#[test]
+fn polar_live_exposes_the_angle_between() {
+    let mut s = selected();
+    s.start("arraypolar").unwrap();
+    // The defaults are 6 items over a full turn: 60 degrees between items.
+    assert_eq!(s.array_live().unwrap().between, Some(60.0));
+
+    let mut v = s.array_live().unwrap();
+    v.items = 1;
+    v.fill = 90.0;
+    s.set_array_live(&v).unwrap();
+    // A single item has no gap: the angle between is the fill angle.
+    assert_eq!(s.array_live().unwrap().between, Some(90.0));
+}
+
+#[test]
+fn polar_set_array_live_derives_the_fill_from_the_angle_between() {
+    let mut s = selected();
+    s.start("arraypolar").unwrap();
+
+    // Items and Angle between edited together: the fill uses the new item count.
+    let mut v = s.array_live().unwrap();
+    v.items = 4;
+    v.between = Some(45.0);
+    s.set_array_live(&v).unwrap();
+    let now = s.array_live().unwrap();
+    assert_eq!((now.items, now.fill), (4, 135.0));
+    assert_eq!(now.between, Some(45.0));
+
+    // A full turn spread over 3 items: 180 degrees each.
+    let mut v = now.clone();
+    v.items = 3;
+    v.between = Some(180.0);
+    s.set_array_live(&v).unwrap();
+    assert_eq!(s.array_live().unwrap().fill, 360.0);
+
+    // An edited Fill angle wins over the angle between.
+    let mut v = s.array_live().unwrap();
+    v.items = 4;
+    v.fill = 90.0;
+    v.between = Some(45.0);
+    s.set_array_live(&v).unwrap();
+    let now = s.array_live().unwrap();
+    assert_eq!((now.items, now.fill), (4, 90.0));
+    assert_eq!(now.between, Some(30.0));
+}
+
+#[test]
+fn polar_set_array_live_refuses_a_bad_angle_between() {
+    let mut s = selected();
+    s.start("arraypolar").unwrap();
+    let before = s.array_live().unwrap();
+
+    let mut zero = before.clone();
+    zero.between = Some(0.0);
+    assert!(s.set_array_live(&zero).is_err());
+    assert_eq!(s.array_live().unwrap(), before);
+
+    let mut inf = before.clone();
+    inf.between = Some(f64::NAN);
+    assert!(s.set_array_live(&inf).is_err());
+    assert_eq!(s.array_live().unwrap(), before);
+
+    // The items would span more than a full turn.
+    let mut wide = before.clone();
+    wide.items = 4;
+    wide.between = Some(180.0);
+    assert!(s.set_array_live(&wide).is_err());
+    assert_eq!(s.array_live().unwrap(), before);
 }
