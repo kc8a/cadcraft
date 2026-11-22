@@ -151,6 +151,31 @@ fn dialog_follows_the_command_line_and_the_window_writes_back() {
 }
 
 #[test]
+fn polar_angle_between_field_resolves_the_fill_angle() {
+    let (mut app, _) = ready(ArrayLiveKind::Polar);
+    let before = app.session.array_live().unwrap();
+    assert!(before.between.is_some(), "polar reads its between");
+    // Editing Angle between leaves fill at live.fill; the engine resolves it.
+    let mut v = before.clone();
+    v.items = 4;
+    v.between = Some(45.0);
+    v.fill = before.fill;
+    app.session.set_array_live(&v).unwrap();
+    let after = app.session.array_live().unwrap();
+    assert_eq!(after.between, Some(45.0));
+    assert!((after.fill - 135.0).abs() < 1e-9, "items 4 / between 45 -> fill 135, got {}", after.fill);
+    // The window stays open and re-reads the resolved values on the next frame.
+    frames(&mut app);
+    assert_eq!(app.ui.dialog.as_deref(), Some("array"));
+}
+
+#[test]
+fn rectangular_has_no_angle_between() {
+    let (app, _) = ready(ArrayLiveKind::Rectangular);
+    assert_eq!(app.session.array_live().unwrap().between, None);
+}
+
+#[test]
 fn dialog_keeps_the_old_values_when_a_value_is_refused() {
     let (mut app, _) = ready(ArrayLiveKind::Polar);
     let before = app.session.array_live().unwrap();

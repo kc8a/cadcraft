@@ -147,6 +147,13 @@ fn polar_fields(ui: &mut egui::Ui, center: &mut Vec2, items: &mut u32, live: &mu
         ui.label(crate::tl!("Items"));
         count_field(ui, items);
         ui.end_row();
+        let mut between = live.between.unwrap_or(0.0);
+        ui.label(crate::tl!("Angle between"));
+        let resp = ui.add(egui::DragValue::new(&mut between).speed(0.1).suffix("°"));
+        if resp.changed() {
+            live.between = Some(between);
+        }
+        ui.end_row();
         ui.label(crate::tl!("Fill angle"));
         ui.add(egui::DragValue::new(&mut live.fill).speed(1.0).suffix("°"));
         ui.end_row();
@@ -215,6 +222,11 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if edited != live {
         match app.session.set_array_live(&edited) {
             Ok(()) => {
+                // Re-read so the next frame draws the stored value (e.g. the Fill angle the
+                // engine resolved from Angle between); the array kind never changes on update.
+                if let Some(l) = app.session.array_live() {
+                    debug_assert_eq!(l.kind, edited.kind);
+                }
                 if let Some(s) = app.array_dlg.as_mut() {
                     s.error = None;
                 }
