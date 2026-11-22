@@ -1055,9 +1055,15 @@ impl PolarM {
     fn ready(&mut self, s: &mut Session) -> Step {
         self.stage = PStage::Center;
         self.assoc = assoc_default(s);
+        // Start at the centre prompt, pre-filled with the selection's centre.
+        self.center = Vec2::ZERO;
         // Rows and levels default to 1.5 × the selection's size apart.
         if let Ok(d) = s.doc() {
             let b = bounds(d, &self.objs);
+            let c = b.center();
+            if c.is_finite() {
+                self.center = c;
+            }
             let size = b.width().max(b.height());
             if size.is_finite() && size > 1e-9 {
                 (self.rs, self.ls) = (size * 1.5, size * 1.5);

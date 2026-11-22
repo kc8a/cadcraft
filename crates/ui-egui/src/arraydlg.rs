@@ -28,37 +28,16 @@ fn command(kind: ArrayLiveKind) -> &'static str {
     }
 }
 
-/// The centre of the selection's union bounds, when it is finite.
-fn selection_center(app: &CadApp) -> Option<Vec2> {
-    let st = app.session.state().ok()?;
-    let mut b = cadcraft_geom::Bounds2::EMPTY;
-    for h in st.shown_selection() {
-        if let Some(e) = st.doc.entity(h) {
-            b = b.union(&cadcraft_doc::entity_bounds(&st.doc, e, 0));
-        }
-    }
-    let c = b.center();
-    (c.x.is_finite() && c.y.is_finite()).then_some(c)
-}
-
 /// Start the real command and open the window on it.
 pub fn open(app: &mut CadApp, kind: ArrayLiveKind) {
-    let (uid, space, center) = {
+    let (uid, space) = {
         let Ok(st) = app.session.state() else { return };
-        (st.uid, st.edit_space(), selection_center(app))
+        (st.uid, st.edit_space())
     };
     // The session, not `CadApp::start`: that one would come back here through the UI commands.
     if let Err(e) = app.session.start(command(kind)) {
         app.session.echo(e.to_string());
         return;
-    }
-    if kind == ArrayLiveKind::Polar
-        && let (Some(c), Some(mut live)) = (center, app.session.array_live())
-    {
-        live.center = Some(c);
-        if let Err(e) = app.session.set_array_live(&live) {
-            app.session.echo(e.to_string());
-        }
     }
     app.array_dlg = Some(ArrayDlgState { error: None, uid, space });
     app.ui.dialog = Some("array".into());

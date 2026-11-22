@@ -107,7 +107,7 @@ fn polar_live_reads_and_writes_and_picks_the_center() {
     // The centre prompt is up: the live values are the defaults.
     let live = s.array_live().unwrap();
     assert_eq!(live.kind, ArrayLiveKind::Polar);
-    assert_eq!(live.center, Some(Vec2::ZERO));
+    assert_eq!(live.center, Some(Vec2::new(5.0, 0.0)));
     assert_eq!((live.items, live.rows, live.levels), (6, 1, 1));
     assert_eq!((live.cols, live.col_spacing), (0, 0.0));
 
@@ -137,7 +137,7 @@ fn polar_set_array_live_sets_the_center_and_advances_from_center_stage() {
     let mut s = selected();
     s.start("arraypolar").unwrap();
     // Still at the Center stage.
-    assert_eq!(s.array_live().unwrap().center, Some(Vec2::ZERO));
+    assert_eq!(s.array_live().unwrap().center, Some(Vec2::new(5.0, 0.0)));
     let mut v = s.array_live().unwrap();
     v.center = Some(Vec2::new(7.0, -2.0));
     s.set_array_live(&v).unwrap();
