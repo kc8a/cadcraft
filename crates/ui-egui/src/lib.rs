@@ -35,6 +35,7 @@ pub mod docking;
 mod drawing_fonts;
 pub mod fault;
 // The Find and Replace window behind the FIND command.
+pub mod arraydlg;
 pub mod finddlg;
 pub mod hatchdlg;
 mod line_editor;
@@ -368,6 +369,8 @@ pub struct CadApp {
     pub alias_dlg: Option<aliasdlg::AliasDlgState>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The Array dialog while open or picking ([`arraydlg`]).
+    pub array_dlg: Option<arraydlg::ArrayDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
     /// A file dialog shown with [`Services::start_pick`]: its answer, and what to do with it.
@@ -430,6 +433,7 @@ impl CadApp {
             autosave_notice: None,
             alias_dlg: None,
             hatch_dlg: None,
+            array_dlg: None,
             bedit: bedit::State::default(),
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: updates_ui::Runtime::default(),
@@ -931,6 +935,7 @@ impl CadApp {
         self.gpu_fault_tick(ctx);
         managers::plot_window_resume(self, ctx);
         hatchdlg::resume(self);
+        arraydlg::resume(self);
         // What follows is frame work, once per layout frame or hidden tick.
         if ctx.current_pass_index() != 0 {
             return;
