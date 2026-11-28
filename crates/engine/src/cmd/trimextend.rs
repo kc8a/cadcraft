@@ -397,7 +397,8 @@ impl TrimM {
         let e = d.entity(h)?;
         // Half a pixel: finer than the eye can tell apart, coarse enough to stay quick.
         let tol = (s.pixel_size() / 2.0).max(1e-9);
-        let part = if self.extend {
+        let extending = self.extend ^ s.shift_down;
+        let part = if extending {
             let grown = Entity { kind: extended(s, h, cursor, cut).ok()?, ..(**e).clone() };
             uncovered(d, &grown, std::slice::from_ref(&e.kind), tol)
         } else {
@@ -414,7 +415,8 @@ impl TrimM {
         Edges { only: self.edges.as_deref(), implied: !quick && implied }
     }
     fn select_edges(&mut self, s: &mut Session) {
-        s.echo(if self.extend { "Select boundary edges ..." } else { "Select cutting edges ..." });
+        let extending = self.extend ^ s.shift_down;
+        s.echo(if extending { "Select boundary edges ..." } else { "Select cutting edges ..." });
         s.set_selection(Vec::new());
         self.stage = Stage::Edges(Vec::new());
     }
@@ -503,16 +505,27 @@ impl Interactive for TrimM {
     fn prompt(&self, s: &Session) -> Prompt {
         match &self.stage {
             Stage::Pick => {
-                let (msg, first) = if self.extend {
-                    ("Select object to extend or shift-select to trim", "Boundary edges")
+                let extending = self.extend ^ s.shift_down;
+                let (msg, first) = if extending {
+                    let msg = if s.shift_down {
+                        "Select object to extend or release Shift to trim"
+                    } else {
+                        "Select object to extend or shift-select to trim"
+                    };
+                    (msg, "Boundary edges")
                 } else {
-                    ("Select object to trim or shift-select to extend", "cuTting edges")
+                    let msg = if s.shift_down {
+                        "Select object to trim or release Shift to extend"
+                    } else {
+                        "Select object to trim or shift-select to extend"
+                    };
+                    (msg, "cuTting edges")
                 };
                 let mut kw = vec![first, "Fence", "Crossing", "mOde", "Project"];
                 if !quick_mode(s) {
                     kw.push("Edge");
                 }
-                if !self.extend {
+                if !extending {
                     kw.push("eRase");
                 }
                 kw.push("Undo");
@@ -528,7 +541,8 @@ impl Interactive for TrimM {
             Stage::Crossing(None) => Prompt::new("Specify first corner", Accept::POINT),
             Stage::Crossing(Some(_)) => Prompt::new("Specify opposite corner", Accept::POINT),
             Stage::Mode => {
-                let msg = if self.extend { "Enter an extend mode option" } else { "Enter a trim mode option" };
+                let extending = self.extend ^ s.shift_down;
+                let msg = if extending { "Enter an extend mode option" } else { "Enter a trim mode option" };
                 Prompt::new(msg, KW).kw(&["Quick", "Standard"]).default(if quick_mode(s) { "Quick" } else { "Standard" })
             }
             Stage::Project => {
@@ -551,7 +565,7 @@ impl Interactive for TrimM {
         self.cut.take();
         let quick = quick_mode(s);
         let implied = edge_mode(s);
-        let extending = self.extend;
+        let extending = self.extend ^ s.shift_down;
         match self.stage.clone() {
             Stage::Mode | Stage::Project | Stage::Edge => self.option(s, i),
             Stage::Edges(mut picked) => {
@@ -719,7 +733,8 @@ impl Interactive for TrimM {
             return None;
         }
         let px = (s.pixel_size() / 2.0).max(1e-9);
-        Some(picks_preview(s, &work, self.extend, self.edges(quick, implied), quick, tol, px))
+        let extending = self.extend ^ s.shift_down;
+        Some(picks_preview(s, &work, extending, self.edges(quick, implied), quick, tol, px))
     }
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         match &self.stage {

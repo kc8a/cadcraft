@@ -287,7 +287,11 @@ fn navigate_canvas(app: &mut CadApp, ui: &mut egui::Ui, nav: &Navigation<'_>) ->
     let p = nav.pointer;
     let inside = p.hover_pos.is_some_and(|at| nav.rect.contains(at) && ui.ctx().layer_id_at(at) == Some(ui.layer_id()) && nav.response.hovered());
     let on_menu = p.hover_pos.is_some_and(|at| over_canvas_menu(app, at));
+    if p.mods.shift != app.session.shift_down || p.mods.ctrl != app.session.ctrl_down {
+        ui.ctx().request_repaint();
+    }
     app.session.ctrl_down = p.mods.ctrl;
+    app.session.shift_down = p.mods.shift;
     ui.input(|i| {
         for event in &i.raw.events {
             if let egui::Event::MouseWheel { unit, .. } = event {

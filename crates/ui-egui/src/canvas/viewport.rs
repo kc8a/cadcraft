@@ -333,7 +333,19 @@ impl HoverPart {
             // Every answer the running command is given counts, not only those that change the
             // prompt: a fence point taken back with Undo leaves the same prompt but a shorter fence.
             let answers = (session.commands_started, session.inputs);
-            (hover, c.x.to_bits(), c.y.to_bits(), scale.to_bits(), doc, answers, session.prompt_text(), super::list::font_generation()).hash(&mut hs);
+            (
+                hover,
+                c.x.to_bits(),
+                c.y.to_bits(),
+                scale.to_bits(),
+                doc,
+                answers,
+                session.shift_down,
+                session.ctrl_down,
+                session.prompt_text(),
+                super::list::font_generation(),
+            )
+                .hash(&mut hs);
             hs.finish()
         };
         if self.key == Some(key) {
